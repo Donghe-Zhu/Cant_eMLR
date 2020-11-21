@@ -1,0 +1,154 @@
+---
+title: "Mapping cstar"
+author: "Jens Daniel Müller"
+date:  "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  workflowr::wflow_html:
+    number_sections: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+editor_options:
+  chunk_output_type: console
+---
+
+```{r parent, child = here::here("analysis/child/setup.Rmd")}
+```
+
+# Predictor fields
+
+Currently, we use combined predictor fields:
+
+- WOA18: S, T, and derived variables
+- GLODAP16: Oxygen, PO4, NO3, Silicate, and derived variables
+
+```{r read_predictor_file}
+
+predictors <- 
+    read_csv(here::here("data/mapping",
+                         "W18_st_G16_opsn.csv"))
+
+```
+
+
+# Load MLR models
+
+```{r load_eMLR_models}
+
+lm_all_wide_cstar <-
+  read_csv(here::here("data/eMLR",
+                       "lm_all_wide_cstar.csv"))
+
+```
+
+# Merge MLRs + climatologies
+
+```{r merge_model_coeff_predictor_climatology}
+
+lm_all_wide_cstar <- lm_all_wide_cstar %>% 
+  mutate(model = str_remove(model, "cstar ~ "))
+         
+cstar <- full_join(predictors, lm_all_wide_cstar)
+
+rm(predictors, lm_all_wide_cstar)
+
+```
+
+
+# Map Cstar
+
+## Apply MLRs to predictor
+
+```{r calculate_cstar}
+
+cstar <- cstar %>% 
+  mutate(cstar =
+          `coeff_(Intercept)` +
+           coeff_aou * aou +
+           coeff_oxygen * oxygen +
+           coeff_phosphate * phosphate +
+           coeff_phosphate_star * phosphate_star +
+           coeff_silicate * silicate +
+           coeff_sal * sal + 
+           coeff_tem * tem)
+
+cstar <- cstar %>% 
+  select(lon, lat, depth, era, basin, cstar, gamma)
+
+```
+
+```{r cstar_average}
+
+cstar_average <- cstar %>%
+  fselect(lon, lat, depth, era, basin, cstar, gamma) %>% 
+  fgroup_by(lon, lat, depth, era, basin) %>% {
+   add_vars(fgroup_vars(.,"unique"),
+            fmean(., keep.group_vars = FALSE),
+            fsd(., keep.group_vars = FALSE) %>% add_stub(pre = FALSE, "_sd"))
+  }
+
+rm(cstar)
+
+cstar_average_Atl <- cstar_average %>% 
+  filter(basin == "Atlantic") %>% 
+  mutate(gamma_slab = cut(gamma, parameters$slabs_Atl))
+
+cstar_average_Ind_Pac <- cstar_average %>% 
+  filter(basin == "Indo-Pacific") %>% 
+  mutate(gamma_slab = cut(gamma, parameters$slabs_Ind_Pac))
+
+cstar_average <- bind_rows(cstar_average_Atl, cstar_average_Ind_Pac)
+
+rm(cstar_average_Atl, cstar_average_Ind_Pac)
+
+```
+
+## Mean cstar sections
+
+For each basin and era combination, the zonal mean cstar is calculated. Likewise, sd is calculated for the averaging of the mean basin fields.
+
+```{r Calculate_cstar_mean_sections}
+
+
+cstar_average <- left_join(cstar_average,
+                           basinmask %>% select(-basin))
+
+
+cstar_average_zonal <- cstar_average %>%
+  fselect(lat, depth, era, basin, basin_AIP,
+          cstar, gamma, cstar_sd, gamma_sd) %>% 
+  fgroup_by(lat, depth, era, basin, basin_AIP) %>% {
+   add_vars(fgroup_vars(.,"unique"),
+            fmean(., keep.group_vars = FALSE) %>% add_stub(pre = FALSE, "_mean"),
+            fsd(., keep.group_vars = FALSE) %>% add_stub(pre = FALSE, "_sd"))
+  }
+
+
+cstar_average_zonal_Atl <- cstar_average_zonal %>% 
+  filter(basin == "Atlantic") %>% 
+  mutate(gamma_slab = cut(gamma_mean, parameters$slabs_Atl))
+
+cstar_average_zonal_Ind_Pac <- cstar_average_zonal %>% 
+  filter(basin == "Indo-Pacific") %>% 
+  mutate(gamma_slab = cut(gamma_mean, parameters$slabs_Ind_Pac))
+
+cstar_average_zonal <- bind_rows(cstar_average_zonal_Atl, cstar_average_zonal_Ind_Pac)
+
+rm(cstar_average_zonal_Atl, cstar_average_zonal_Ind_Pac)
+
+
+```
+
+# Write csv
+
+```{r write_cstar_files}
+
+cstar_average %>%
+    write_csv(here::here("data/output",
+                         "cstar_3d.csv"))
+
+cstar_average_zonal %>%
+    write_csv(here::here("data/output",
+                         "cstar_zonal.csv"))
+
+```
